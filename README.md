@@ -64,3 +64,176 @@ Work on a branch, commit your code and README, open a Pull Request, and paste it
 - The output is genuinely **structured** and could be consumed by another program
 - Both the **step limit** and the **safety mitigation** actually run, and you can explain what each protects against
 - No API key is committed to the repo
+
+---
+
+## Solution
+
+### Scenario: Trip Concierge
+
+**Goal:** *"Plan a 3-day trip to Porto under €600 total. Find me a flight and hotel, then give me the total cost."*
+
+The Trip Concierge scenario was chosen because it naturally requires three sequential, dependent steps that cannot be collapsed into one: you must find a flight before you know how much budget remains for a hotel, and you can only calculate the total once both prices are known. This makes it an honest test of agent reasoning — the agent cannot shortcut the problem.
+
+### Three Tools
+
+| Tool | Purpose |
+|---|---|
+| `search_flights(destination, budget_eur)` | Returns the cheapest flight to the destination within the given budget |
+| `search_hotels(city, nights, budget_per_night_eur)` | Returns the best-rated hotel within the nightly budget |
+| `calculate(items)` | Sums a list of EUR costs and returns the total |
+
+Mock data lives in `data/mock_data.json`. The focus is agent behaviour, not a live API.
+
+### Two Implementations
+
+This submission includes two working agent implementations:
+
+| File | Approach | Model |
+|---|---|---|
+| `agent.py` | Hand-rolled ReAct loop | `llama3.1:8b` via Ollama |
+| `agent_adk.py` | Google ADK + LiteLLM | `qwen2.5:7b` via Ollama |
+
+Both share the same `tools.py` and `data/mock_data.json`. Both produce a structured result and enforce a step limit.
+
+### Stack
+
+- **LLM:** Ollama (runs fully locally, no API key required)
+- **Python:** 3.11+
+- **Dependencies:** `requests`, `google-adk`, `litellm`
+
+### How to Run
+
+**Install dependencies:**
+```bash
+pip install requests google-adk litellm
+```
+
+**Pull models:**
+```bash
+ollama pull llama3.1:8b
+ollama pull qwen2.5:7b
+```
+
+**Run hand-rolled version:**
+```bash
+python agent.py
+```
+
+**Run ADK version:**
+```bash
+python agent_adk.py
+```
+
+---
+
+### Reliability
+
+**Step limit:** Both implementations cap the agent at `MAX_STEPS = 10`.
+
+- In `agent.py`, the hand-rolled loop exits after 10 iterations and returns a structured error object.
+- In `agent_adk.py`, ADK's native `RunConfig(max_llm_calls=10)` is used — this is ADK's built-in mechanism for bounding agent execution.
+
+If the step limit is reached, both agents return:
+```json
+{
+  "error": "Agent reached maximum steps without completing the goal.",
+  "max_steps": 10,
+  "goal": "..."
+}
+```
+
+**Tool failure handling:** Each tool returns an `{"error": "..."}` dict on invalid input rather than raising an exception. The agent receives the error as a tool result and can recover — for example, by correcting an argument or trying a different budget.
+
+**What it protects against:** Without a step limit, a confused model can loop indefinitely — repeatedly calling the same tool or failing to emit a final answer. The cap ensures the process always terminates and the caller always receives a response.
+
+---
+
+### Safety
+
+**Mitigation: Tool argument validation and sanitization** (implemented in `tools.py`)
+
+Every tool validates and sanitizes its inputs before acting on them:
+
+- **Type coercion:** `budget_eur` and `nights` auto-cast from string to the correct numeric type. Small models frequently emit `"600"` instead of `600`; rather than crashing, the tool corrects the type and continues.
+- **Bounds checking:** `_validate_budget()` rejects values outside `(0, 100,000]`. `_validate_nights()` rejects values outside `[1, 30]`. This prevents runaway computation from absurd inputs like `nights=99999`.
+- **String sanitization:** `_sanitize_string()` strips whitespace and rejects strings longer than 100 characters, preventing oversized or structurally malicious inputs from reaching downstream logic.
+- **List parsing in `calculate`:** If the model passes `"[155, 330]"` as a string instead of a JSON array, the tool parses it safely via `json.loads`. Each item is then verified to be a non-negative number.
+
+**What attack does this defend against?**
+
+A prompt injection attack could cause the LLM to emit malicious tool arguments — for example `budget_eur: -1` to trigger unexpected behaviour, `nights: 99999` to cause runaway computation, or a crafted destination string containing markup intended to break downstream processing. By validating every argument at the tool boundary — treating the model's output as untrusted data — we ensure that even a compromised or manipulated model cannot cause the tools to act outside their intended contract.
+
+---
+
+### Captured Runs
+
+#### Hand-rolled agent (`agent.py`)
+
+```
+==================================================
+GOAL: Plan a 3-day trip to Porto under €600 total. Find me a flight and hotel, then give me the total cost.
+==================================================
+
+--- Step 1/10 ---
+Tool call: search_flights({'destination': 'Porto', 'budget_eur': 400})
+Tool result: {'flight_id': 'FL003', 'airline': 'Turkish Airlines', 'price_eur': 155, 'duration_hours': 8, 'destination': 'Porto'}
+
+--- Step 2/10 ---
+Tool call: search_hotels({'city': 'Porto', 'nights': 3, 'budget_per_night_eur': 150})
+Tool result: {'hotel_id': 'HT002', 'name': 'Ribeira Boutique Hotel', 'stars': 4, 'price_per_night_eur': 110, 'nights': 3, 'total_hotel_cost_eur': 330, 'amenities': ['wifi', 'breakfast', 'pool']}
+
+--- Step 3/10 ---
+Tool call: calculate({'items': [155, 330]})
+Tool result: {'items': [155.0, 330.0], 'total_eur': 485.0}
+
+--- Step 4/10 ---
+{"final_answer": {"flight": {"airline": "Turkish Airlines", "price_eur": 155, "duration_hours": 8}, "hotel": {"name": "Ribeira Boutique Hotel", "stars": 4, "price_per_night_eur": 110, "nights": 3, "total_hotel_cost_eur": 330}, "total_cost_eur": 485.0, "within_budget": true}}
+
+==================================================
+FINAL RESULT:
+{
+  "flight": {
+    "airline": "Turkish Airlines",
+    "price_eur": 155,
+    "duration_hours": 8
+  },
+  "hotel": {
+    "name": "Ribeira Boutique Hotel",
+    "stars": 4,
+    "price_per_night_eur": 110,
+    "nights": 3,
+    "total_hotel_cost_eur": 330
+  },
+  "total_cost_eur": 485.0,
+  "within_budget": true
+}
+==================================================
+```
+
+#### ADK agent (`agent_adk.py`)
+
+```
+==================================================
+GOAL: Plan a 3-day trip to Porto under €600 total. Find me a flight and hotel, then give me the total cost.
+==================================================
+
+--- Step 1/10 ---
+Tool call: search_flights({'destination': 'Porto', 'budget_eur': 400})
+Tool result: {'flight_id': 'FL003', 'airline': 'Turkish Airlines', 'price_eur': 155, 'duration_hours': 8, 'destination': 'Porto'}
+
+--- Step 2/10 ---
+Tool call: search_hotels({'city': 'Porto', 'nights': 3, 'budget_per_night_eur': 160})
+Tool result: {'hotel_id': 'HT002', 'name': 'Ribeira Boutique Hotel', 'stars': 4, 'price_per_night_eur': 110, 'nights': 3, 'total_hotel_cost_eur': 330, 'amenities': ['wifi', 'breakfast', 'pool']}
+
+--- Step 3/10 ---
+Tool call: calculate({'items': [155, 330]})
+Tool result: {'items': [155.0, 330.0], 'total_eur': 485.0}
+
+==================================================
+AGENT FINAL RESPONSE:
+{"Flight": "Turkish Airlines €155", "Hotel": "Ribeira Boutique Hotel 3 nights €330", "Total": "€485", "Within budget": "Yes"}
+==================================================
+```
+
+Both agents chose their own tool order and arguments at each step. No step sequence was hardcoded. The total of €485 is €115 under the €600 budget.

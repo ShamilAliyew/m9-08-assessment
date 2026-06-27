@@ -1,0 +1,57 @@
+{
+  "flights": [
+    {
+      "id": "FL001",
+      "origin": "Baku",
+      "destination": "Porto",
+      "date": "2024-08-01",
+      "airline": "TAP Air Portugal",
+      "price_eur": 180,
+      "duration_hours": 7
+    },
+    {
+      "id": "FL002",
+      "origin": "Baku",
+      "destination": "Porto",
+      "date": "2024-08-01",
+      "airline": "Lufthansa",
+      "price_eur": 210,
+      "duration_hours": 9
+    },
+    {
+      "id": "FL003",
+      "origin": "Baku",
+      "destination": "Porto",
+      "date": "2024-08-01",
+      "airline": "Turkish Airlines",
+      "price_eur": 155,
+      "duration_hours": 8
+    }
+  ],
+  "hotels": [
+    {
+      "id": "HT001",
+      "name": "Porto City Inn",
+      "city": "Porto",
+      "stars": 3,
+      "price_per_night_eur": 65,
+      "amenities": ["wifi", "breakfast"]
+    },
+    {
+      "id": "HT002",
+      "name": "Ribeira Boutique Hotel",
+      "city": "Porto",
+      "stars": 4,
+      "price_per_night_eur": 110,
+      "amenities": ["wifi", "breakfast", "pool"]
+    },
+    {
+      "id": "HT003",
+      "name": "Budget Stay Porto",
+      "city": "Porto",
+      "stars": 2,
+      "price_per_night_eur": 40,
+      "amenities": ["wifi"]
+    }
+  ]
+}
